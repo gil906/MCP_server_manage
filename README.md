@@ -8,14 +8,18 @@ The communication flows as follows: You interact with a client application (Open
 
 ```mermaid
 graph TD
-    U[User] --> CLIENT{Client Application <br> (OpenWebUI / VS Code)}
-    CLIENT -- "User Prompt + Tool Definitions" --> LITELLM[LiteLLM <br> (Acts as AI/LLM Proxy, <br> e.g., http://192.168.0.202:4000)]
-    LITELLM -- "Tool Call Request (HTTP POST + API Key)" --> RPI_TOOL_SERVER[Raspberry Pi Tool Server <br> (FastAPI App on RPi @192.168.0.202:8080)]
+    U[User] --> CLIENT["Client Application
+(OpenWebUI / VS Code)"]
+    CLIENT -- "User Prompt + Tool Definitions" --> LITELLM["LiteLLM
+(Acts as AI/LLM Proxy,
+e.g., http://192.168.0.202:4000)"]
+    LITELLM -- "Tool Call Request (HTTP POST + API Key)" --> RPI_TOOL_SERVER["Raspberry Pi Tool Server
+(FastAPI App on RPi @192.168.0.202:8080)"]
     
     subgraph "Raspberry Pi (192.168.0.202)"
         RPI_TOOL_SERVER
         DOCKER_ENGINE[Host Docker Engine]
-        HOST_OS[Host OS & System Commands]
+        HOST_OS["Host OS & System Commands"]
     end
 
     RPI_TOOL_SERVER -- "Docker Commands (via /var/run/docker.sock)" --> DOCKER_ENGINE
