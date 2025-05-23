@@ -4,6 +4,48 @@ This setup allows you to manage your Raspberry Pi server (including Docker conta
 
 ## Architecture
 
+```mermaid
+graph TD
+    subgraph User Interaction
+        U[User]
+        OUI[OpenWebUI / LiteLLM Client]
+        VSC[VS Code Copilot / Custom Extension]
+    end
+
+    subgraph AI/LLM Layer
+        LLM[LLM via LiteLLM]
+    end
+
+    subgraph Raspberry Pi Server (192.168.0.202)
+        RPITS[Tool Server - FastAPI App :8080]
+        DOCKER[Docker Engine]
+        SYSTEM[OS / System Commands]
+    end
+
+    U --> OUI
+    U --> VSC
+
+    OUI -- Prompts/Tool Definitions --> LLM
+    VSC -- Prompts/API Calls --> RPITS
+    VSC -- Prompts/Tool Definitions (if applicable) --> LLM
+
+
+    LLM -- Tool Call Request --> OUI
+    OUI -- HTTP API Call (JSON + API Key) --> RPITS
+
+    RPITS -- Docker Commands --> DOCKER
+    RPITS -- System Commands --> SYSTEM
+
+    DOCKER -- Results --> RPITS
+    SYSTEM -- Results --> RPITS
+
+    RPITS -- HTTP API Response (JSON) --> OUI
+    RPITS -- HTTP API Response (JSON) --> VSC
+
+    OUI -- Tool Result --> LLM
+    LLM -- Final Natural Language Response --> OUI
+```
+
 1.  **Tool Server (Raspberry Pi)**: A Python FastAPI application runs on your Raspberry Pi (192.168.0.202). It exposes secure API endpoints for:
     *   Executing predefined system commands.
     *   Managing Docker containers.
