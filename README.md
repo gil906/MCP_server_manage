@@ -16,7 +16,7 @@ graph TD
         LLM[LLM via LiteLLM]
     end
 
-    subgraph Raspberry Pi Server (192.168.0.202)
+    subgraph "Raspberry Pi Server (192.168.0.202)"
         RPITS[Tool Server - FastAPI App :8080]
         DOCKER[Docker Engine]
         SYSTEM[OS / System Commands]
