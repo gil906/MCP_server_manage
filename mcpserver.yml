@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  mcp-server:
+    build:
+      context: /mnt/media/MCP
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    ports:
+      - "8082:8082"
+    volumes:
+      - /proc:/proc
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/spool/cron/crontabs:/var/spool/cron/crontabs
+      - /mnt/media/MCP/container_data:/app/data
+    user: "1000:1000"  # Matches gil906's UID:GID
+    environment:
+      - FLASK_ENV=production
+    restart: unless-stopped
+    
