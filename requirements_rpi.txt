@@ -1,4 +1,0 @@
-fastapi
-uvicorn
-docker
-python-dotenv # Optional, if you decide to use .env files for API keys etc.
