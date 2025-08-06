@@ -12,8 +12,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/spool/cron/crontabs:/var/spool/cron/crontabs
       - /mnt/media/MCP/container_data:/app/data
-    user: "1000:1000"  # Matches gil906's UID:GID
+    user: "1000:986"  # Matches gil906's UID and docker GID
     environment:
       - FLASK_ENV=production
     restart: unless-stopped
-    
+

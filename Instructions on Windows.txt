@@ -15,3 +15,6 @@ on VSC mcp.json folder:
 
 
 
+# To build: docker-compose -f mcpserver.yml up -d --build
+
+
