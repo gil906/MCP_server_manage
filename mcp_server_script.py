@@ -1,250 +1,211 @@
-from flask import Flask, request, jsonify
-import psutil
-import docker
+from __future__ import annotations
+
+import os
 import subprocess
+from typing import Any, Dict, List, Literal, Optional
 
-app = Flask(__name__)
+import docker
+import psutil
+from mcp.server.fastmcp import FastMCP
 
-@app.route('/get_cpu_usage', methods=['GET'])
-def get_cpu_usage():
-    cpu = psutil.cpu_percent()
-    return jsonify({"status": "success", "result": f"CPU usage: {cpu}%"})
+# Create the MCP server
+mcp = FastMCP(name="Raspberry Pi MCP")
 
-@app.route('/get_memory_usage', methods=['GET'])
-def get_memory_usage():
+
+# -------- System Info --------
+@mcp.tool()
+def get_cpu_usage() -> dict:
+    """Get current CPU utilization percent."""
+    return {"usage_percent": psutil.cpu_percent(interval=0.2)}
+
+
+@mcp.tool()
+def get_memory_usage() -> dict:
+    """Get memory usage in bytes and percent."""
     mem = psutil.virtual_memory()
-    return jsonify({"status": "success", "result": f"Memory usage: {mem.used / (1024 ** 3):.2f}GB / {mem.total / (1024 ** 3):.2f}GB"})
+    return {
+        "total_bytes": int(mem.total),
+        "used_bytes": int(mem.used),
+        "available_bytes": int(mem.available),
+        "percent": float(mem.percent),
+    }
 
-@app.route('/create_container', methods=['POST'])
-def create_container():
-    data = request.get_json()
-    image = data.get('image')
-    name = data.get('name')
-    if not image or not name:
-        return jsonify({"status": "error", "message": "Missing image or name"}), 400
+
+# -------- Docker helpers --------
+
+def _docker() -> docker.DockerClient:
+    return docker.from_env()
+
+
+@mcp.tool()
+def list_containers(all: bool = True) -> dict:
+    """List Docker containers (id, name, status, image)."""
     try:
-        client = docker.from_env()
-        client.containers.run(image, name=name, detach=True)
-        return jsonify({"status": "success", "result": f"Container {name} created with image {image}"})
+        client = _docker()
+        items = []
+        for c in client.containers.list(all=all):
+            items.append(
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "status": getattr(c, "status", "unknown"),
+                    "image": c.image.tags[0] if c.image.tags else str(c.image.short_id),
+                }
+            )
+        return {"containers": items}
+    except Exception as e:  # pragma: no cover - surface error to user
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def container_logs(name: str, tail: int = 100) -> dict:
+    """Get the last N log lines from a container."""
+    try:
+        client = _docker()
+        c = client.containers.get(name)
+        logs = c.logs(tail=tail).decode("utf-8", errors="replace")
+        return {"name": c.name, "tail": tail, "logs": logs}
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return {"error": str(e)}
 
-@app.route('/create_crontab_task', methods=['POST'])
-def create_crontab_task():
-    data = request.get_json()
-    schedule = data.get('schedule')
-    command = data.get('command')
-    if not schedule or not command:
-        return jsonify({"status": "error", "message": "Missing schedule or command"}), 400
+
+@mcp.tool()
+def create_container(image: str, name: str, command: Optional[str] = None, detach: bool = True) -> dict:
+    """Create and start a container from an image."""
     try:
-        subprocess.run(f'(crontab -l 2>/dev/null; echo "{schedule} {command}") | crontab -', shell=True)
-        return jsonify({"status": "success", "result": f"Crontab task created: {schedule} {command}"})
+        client = _docker()
+        container = client.containers.run(image, name=name, command=command, detach=detach)
+        return {"created": True, "id": container.id, "name": container.name}
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return {"error": str(e)}
 
-@app.route("/", methods=["GET", "POST"])
-def root():
-    if request.method == "POST":
-        try:
-            data = request.get_json(force=True, silent=True)
-            if data and data.get("method") == "initialize":
-                # Respond with MCP-like capabilities and tools for VS Code
-                return jsonify({
-                    "jsonrpc": "2.0",
-                    "id": data.get("id", 1),
-                    "result": {
-                        "capabilities": {
-                            "serverName": "MCP Python Server",
-                            "version": "1.0.0",
-                            "features": [
-                                "cpu_usage", "memory_usage", "container_management", "crontab", "file_listing", "network_test", "virtual_ip", "iptables"
-                            ],
-                            "tools": [
-                                {"name": "get_cpu_usage", "description": "Get CPU usage"},
-                                {"name": "get_memory_usage", "description": "Get memory usage"},
-                                {"name": "create_container", "description": "Create a new Docker container"},
-                                {"name": "delete_container", "description": "Delete a Docker container"},
-                                {"name": "stop_container", "description": "Stop a Docker container"},
-                                {"name": "start_container", "description": "Start a Docker container"},
-                                {"name": "restart_container", "description": "Restart a Docker container"},
-                                {"name": "inspect_container", "description": "Inspect a Docker container"},
-                                {"name": "container_logs", "description": "Get logs from a Docker container"},
-                                {"name": "list_containers", "description": "List all Docker containers"},
-                                {"name": "create_crontab_task", "description": "Create a crontab task"},
-                                {"name": "list_files", "description": "List files in a directory"},
-                                {"name": "network_test", "description": "Run a network test (ping)"},
-                                {"name": "create_virtual_ip", "description": "Create a virtual IP on the host"},
-                                {"name": "iptables_rule", "description": "Add or remove iptables rules for ports"}
-                            ]
-                        }
-                    }
-                })
-            else:
-                return jsonify({"status": "success", "message": "MCP Server is running (POST)"})
-        except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 500
-    else:
-        return jsonify({"status": "success", "message": "MCP Server is running (GET)"})
 
-@app.route('/list_containers', methods=['GET'])
-def list_containers():
+@mcp.tool()
+def delete_container(name: str, force: bool = True) -> dict:
+    """Delete a container by name."""
     try:
-        client = docker.from_env()
-        containers = client.containers.list(all=True)
-        result = []
-        for c in containers:
-            result.append({
-                "id": c.id,
-                "name": c.name,
-                "status": c.status,
-                "image": str(c.image.tags)
-            })
-        return jsonify({"status": "success", "containers": result})
+        client = _docker()
+        c = client.containers.get(name)
+        c.remove(force=force)
+        return {"deleted": True, "name": name}
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return {"error": str(e)}
 
-@app.route('/container_logs', methods=['GET'])
-def container_logs():
-    container_name = request.args.get('name')
-    tail = int(request.args.get('tail', 100))
-    if not container_name:
-        return jsonify({"status": "error", "message": "Missing container name"}), 400
+
+@mcp.tool()
+def stop_container(name: str, timeout: int = 10) -> dict:
+    """Stop a container by name."""
     try:
-        client = docker.from_env()
-        container = client.containers.get(container_name)
-        logs = container.logs(tail=tail).decode('utf-8')
-        return jsonify({"status": "success", "logs": logs})
+        client = _docker()
+        c = client.containers.get(name)
+        c.stop(timeout=timeout)
+        return {"stopped": True, "name": name}
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return {"error": str(e)}
 
-@app.route('/create_virtual_ip', methods=['POST'])
-def create_virtual_ip():
-    data = request.get_json()
-    ip = data.get('ip')
-    interface = data.get('interface', 'eth0')
-    if not ip:
-        return jsonify({"status": "error", "message": "Missing IP address"}), 400
+
+@mcp.tool()
+def start_container(name: str) -> dict:
+    """Start a container by name."""
     try:
-        result = subprocess.run(["sudo", "ip", "addr", "add", ip, "dev", interface], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        client = _docker()
+        c = client.containers.get(name)
+        c.start()
+        return {"started": True, "name": name}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def restart_container(name: str) -> dict:
+    """Restart a container by name."""
+    try:
+        client = _docker()
+        c = client.containers.get(name)
+        c.restart()
+        return {"restarted": True, "name": name}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def inspect_container(name: str) -> dict:
+    """Return low-level information about a container."""
+    try:
+        client = _docker()
+        c = client.containers.get(name)
+        return {"name": c.name, "attrs": c.attrs}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# -------- Crontab --------
+@mcp.tool()
+def create_crontab_task(schedule: str, command: str) -> dict:
+    """Append a cron entry to the user's crontab. Requires writable crontab mount on host."""
+    try:
+        # Combine existing crontab (if any) with the new line
+        line = f"{schedule} {command}"
+        cmd = f'(crontab -l 2>/dev/null; echo "{line}") | crontab -'
+        result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
-            return jsonify({"status": "success", "message": f"Virtual IP {ip} added to {interface}"})
-        else:
-            return jsonify({"status": "error", "message": result.stderr}), 500
+            return {"created": True, "entry": line}
+        return {"error": result.stderr.strip() or "failed to write crontab"}
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return {"error": str(e)}
 
-@app.route('/list_files', methods=['GET'])
-def list_files():
-    import os
-    folder = request.args.get('folder', '/mnt/media')
+
+# -------- Filesystem --------
+@mcp.tool()
+def list_files(folder: str = "/mnt/media") -> dict:
+    """List files in a folder."""
     try:
-        files = os.listdir(folder)
-        return jsonify({"status": "success", "files": files})
+        return {"folder": folder, "files": sorted(os.listdir(folder))}
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return {"error": str(e)}
 
-@app.route('/network_test', methods=['GET'])
-def network_test():
-    import subprocess
-    target = request.args.get('target', '8.8.8.8')
+
+# -------- Network utilities (may require extra container capabilities) --------
+@mcp.tool()
+def network_test(target: str = "8.8.8.8", count: int = 4) -> dict:
+    """Ping a target host or IP."""
     try:
-        result = subprocess.run(["ping", "-c", "4", target], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(["ping", "-c", str(count), target], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
-            return jsonify({"status": "success", "output": result.stdout})
+            return {"ok": True, "output": result.stdout}
+        return {"error": result.stderr or result.stdout}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def create_virtual_ip(ip: str, interface: str = "eth0") -> dict:
+    """Add a virtual IP to an interface. Requires NET_ADMIN and host networking to affect the host."""
+    try:
+        result = subprocess.run(["ip", "addr", "add", ip, "dev", interface], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0:
+            return {"ok": True, "message": f"Added {ip} to {interface}"}
+        return {"error": result.stderr.strip() or result.stdout.strip()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def iptables_rule(action: Literal["add", "remove"], port: int, protocol: str = "tcp") -> dict:
+    """Add or remove an iptables ACCEPT rule on INPUT for a port/protocol. Requires NET_ADMIN."""
+    try:
+        if action == "add":
+            cmd = ["iptables", "-A", "INPUT", "-p", protocol, "--dport", str(port), "-j", "ACCEPT"]
         else:
-            return jsonify({"status": "error", "output": result.stderr}), 500
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/delete_container', methods=['POST'])
-def delete_container():
-    data = request.get_json()
-    name = data.get('name')
-    if not name:
-        return jsonify({"status": "error", "message": "Missing container name"}), 400
-    try:
-        client = docker.from_env()
-        container = client.containers.get(name)
-        container.remove(force=True)
-        return jsonify({"status": "success", "result": f"Container {name} deleted"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/stop_container', methods=['POST'])
-def stop_container():
-    data = request.get_json()
-    name = data.get('name')
-    if not name:
-        return jsonify({"status": "error", "message": "Missing container name"}), 400
-    try:
-        client = docker.from_env()
-        container = client.containers.get(name)
-        container.stop()
-        return jsonify({"status": "success", "result": f"Container {name} stopped"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/start_container', methods=['POST'])
-def start_container():
-    data = request.get_json()
-    name = data.get('name')
-    if not name:
-        return jsonify({"status": "error", "message": "Missing container name"}), 400
-    try:
-        client = docker.from_env()
-        container = client.containers.get(name)
-        container.start()
-        return jsonify({"status": "success", "result": f"Container {name} started"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/restart_container', methods=['POST'])
-def restart_container():
-    data = request.get_json()
-    name = data.get('name')
-    if not name:
-        return jsonify({"status": "error", "message": "Missing container name"}), 400
-    try:
-        client = docker.from_env()
-        container = client.containers.get(name)
-        container.restart()
-        return jsonify({"status": "success", "result": f"Container {name} restarted"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/inspect_container', methods=['GET'])
-def inspect_container():
-    name = request.args.get('name')
-    if not name:
-        return jsonify({"status": "error", "message": "Missing container name"}), 400
-    try:
-        client = docker.from_env()
-        container = client.containers.get(name)
-        info = container.attrs
-        return jsonify({"status": "success", "info": info})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/iptables_rule', methods=['POST'])
-def iptables_rule():
-    data = request.get_json()
-    action = data.get('action')  # 'add' or 'remove'
-    port = str(data.get('port'))
-    protocol = data.get('protocol', 'tcp')
-    if action not in ['add', 'remove'] or not port:
-        return jsonify({"status": "error", "message": "Missing or invalid action/port"}), 400
-    try:
-        if action == 'add':
-            cmd = ["sudo", "iptables", "-A", "INPUT", "-p", protocol, "--dport", port, "-j", "ACCEPT"]
-        else:
-            cmd = ["sudo", "iptables", "-D", "INPUT", "-p", protocol, "--dport", port, "-j", "ACCEPT"]
+            cmd = ["iptables", "-D", "INPUT", "-p", protocol, "--dport", str(port), "-j", "ACCEPT"]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode == 0:
-            return jsonify({"status": "success", "message": f"Rule {action}ed for port {port}/{protocol}"})
-        else:
-            return jsonify({"status": "error", "message": result.stderr}), 500
+            return {"ok": True, "message": f"{action} rule for {port}/{protocol}"}
+        return {"error": result.stderr.strip() or result.stdout.strip()}
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return {"error": str(e)}
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8082)
+
+if __name__ == "__main__":
+    # Expose Streamable HTTP transport on /mcp so VS Code can connect via HTTP
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=8082)

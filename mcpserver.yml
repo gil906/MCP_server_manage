@@ -5,15 +5,17 @@ services:
       context: /mnt/media/MCP
       dockerfile: Dockerfile
     container_name: mcp-server
-    ports:
-      - "8082:8082"
+    # Host networking is required only if you want ip/iptables to affect the host
+    network_mode: host
+    # If you do NOT need host-level networking, remove network_mode and uncomment the ports mapping below
+    # ports:
+    #   - "8082:8082"
     volumes:
-      - /proc:/proc
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/spool/cron/crontabs:/var/spool/cron/crontabs
       - /mnt/media/MCP/container_data:/app/data
     user: "1000:986"  # Matches gil906's UID and docker GID
-    environment:
-      - FLASK_ENV=production
+    cap_add:
+      - NET_ADMIN   # Needed for ip addr/iptables tools
     restart: unless-stopped
 
